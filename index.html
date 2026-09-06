@@ -124,7 +124,7 @@
     transition: background .15s;
   }
   .diff-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
-  .rank { width: 100%; max-width: 300px; background: #f1f5f9; border-radius: 10px; padding: 10px 14px; text-align: left; }
+  .rank { width: 100%; max-width: 300px; background: #f1f5f9; border-radius: 10px; padding: 10px 14px; text-align: left; max-height: 40vh; overflow-y: auto; -webkit-overflow-scrolling: touch; }
   .rank .row { display: flex; justify-content: space-between; font-size: 14px; padding: 3px 0; }
   .rank .row .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; }
   .rank .row .dead { color: var(--muted); text-decoration: line-through; }
@@ -244,7 +244,7 @@
         <button class="big-btn" id="startBtn">开始游戏</button>
         <div class="keyboard-hint">
           移动 <b>方向键 / WASD</b><br>
-          加速 <b>Shift 按住</b> · 无敌 <b>E</b> · 暂停 <b>P / Esc</b>
+          加速 <b>Shift 按住</b> · 无敌 <b>空格</b> · 暂停 <b>P / Esc</b>
         </div>
       </div>
 
@@ -270,7 +270,7 @@
       <button class="ability" id="invBtn">
         <div class="cd-ring"><div class="inner" id="invIcon">🛡️</div></div>
         <span class="name">无敌</span>
-        <span class="hint">E · 有冷却</span>
+        <span class="hint">空格 · 有冷却</span>
       </button>
     </div>
     <div class="energy"><div class="fill" id="energyFill"></div></div>
@@ -281,7 +281,7 @@
       </div>
     </div>
     <div class="keyboard-hint" id="kbHint">
-      移动 <b>方向键 / WASD</b> · 加速 <b>Shift 按住</b> · 无敌 <b>E</b> · 暂停 <b>P / Esc</b>
+      移动 <b>方向键 / WASD</b> · 加速 <b>Shift 按住</b> · 无敌 <b>空格</b> · 暂停 <b>P / Esc</b>
     </div>
   </div>
 
@@ -291,7 +291,7 @@
 
   // ---------- 常量 ----------
   const CELL = 22;
-  const BASE_SIZE = 24, MAX_SIZE = 48, GROW_STEP = 2, GROW_EVERY = 10;
+  const BASE_SIZE = 24, MAX_SIZE = 160, GROW_STEP = 2, GROW_EVERY = 10;
   let COLS = BASE_SIZE, ROWS = BASE_SIZE;
   const DIRS = {
     up:    { x: 0,  y: -1 },
@@ -316,6 +316,8 @@
   const START_INTERVAL = 260;   // 初始移动间隔 ms
   const MIN_INTERVAL = 120;     // 最快间隔
   const SPEED_STEP = 1.5;       // 每吃一个食物加快的 ms
+  const MAX_SPEED_LEN = 35;     // 长度达到该值后速度不再变化
+  const MAX_SNAKES = 12;        // 场上存活蛇总数上限
 
   const DIFFICULTY = {
     easy:   { label: '简单', aiInterval: [330, 390], noise: 26 },
@@ -388,6 +390,7 @@
   let foodEaten = 0;
   let nextSpawnLen = 10;
   let aiSpawned = 0;
+  let clearedHazards = false;
   let lastFrame = performance.now();
   let spawnTimer = 0, bombTimer = 0;
 
@@ -723,7 +726,8 @@
   // ---------- 难度 ----------
   function updateDifficulty() {
     level = 1 + Math.floor(foodEaten / 20);
-    player.moveInterval = Math.max(MIN_INTERVAL, START_INTERVAL - foodEaten * SPEED_STEP);
+    const cappedEaten = Math.min(foodEaten, MAX_SPEED_LEN - 3);
+    player.moveInterval = Math.max(MIN_INTERVAL, START_INTERVAL - cappedEaten * SPEED_STEP);
   }
 
   // ---------- 输入 ----------
@@ -742,10 +746,12 @@
       return;
     }
     if (e.key === 'Shift') { accelActive = true; }
-    if (e.key === 'e' || e.key === 'E') { tryActivateInvincible(); }
+    if (e.key === ' ') {
+      if (state === 'playing') tryActivateInvincible();
+      else if (state === 'menu') startGame();
+    }
     if (e.key === 'p' || e.key === 'P' || e.key === 'Escape') { togglePause(); }
-    if ((e.key === 'Enter' || e.key === ' ') && state === 'menu') startGame();
-    if ((e.key === 'Enter') && state === 'gameover') startGame();
+    if (e.key === 'Enter' && (state === 'menu' || state === 'gameover')) startGame();
   });
   window.addEventListener('keyup', (e) => {
     if (e.key === 'Shift') accelActive = false;
@@ -857,6 +863,7 @@
     foods = []; specialFood = null; bombs = [];
     score = 0; level = 1;
     foodEaten = 0; nextSpawnLen = 10;
+    clearedHazards = false;
     energy = ENERGY_MAX;
     accelActive = false;
     invincibleUntil = 0; invincibleCdUntil = 0;
@@ -890,7 +897,7 @@
       ? '你击败了所有 AI 蛇！'
       : (player.deathReason ? `你${player.deathReason}，本局得分 ${score}` : `本局得分 ${score}`);
     if (won) sfx.win();
-    const ranking = [...snakes].sort((a, b) => b.body.length - a.body.length);
+    const ranking = [...snakes].sort((a, b) => b.body.length - a.body.length).slice(0, 5);
     rankList.innerHTML = ranking.map(s => {
       const dot = `<span class="dot" style="background:${s.color}"></span>`;
       return `<div class="row ${s.alive ? '' : 'dead'}">` +
@@ -924,7 +931,7 @@
         if (specialFood) {
           if (now - spawnTimer > 8000) { specialFood = null; }
         } else if (now - spawnTimer > 6000) { spawnSpecialFood(); spawnTimer = now; }
-        if (now - bombTimer > 5000) { spawnBomb(); bombTimer = now; }
+        if (player.length < 50 && now - bombTimer > 5000) { spawnBomb(); bombTimer = now; }
         updateDifficulty();
       }
 
@@ -939,9 +946,11 @@
       }
       checkCollisions();
 
-      // 长度每 +10 新增 3 条长 9 的蛇
+      // 长度每 +10 新增 3 条长 9 的蛇（存活蛇总数不超过 MAX_SNAKES）
       if (player.alive && player.length >= nextSpawnLen) {
-        for (let i = 0; i < 3; i++) spawnAiSnake(9);
+        const aliveCount = snakes.filter(s => s.alive).length;
+        const toSpawn = Math.min(3, MAX_SNAKES - aliveCount);
+        for (let i = 0; i < toSpawn; i++) spawnAiSnake(9);
         nextSpawnLen += 10;
       }
 
@@ -950,6 +959,12 @@
       if (targetSize > COLS) {
         COLS = targetSize; ROWS = targetSize;
         resizeCanvas();
+      }
+
+      // 长度达到 50 后清除障碍物
+      if (player.alive && player.length >= 50 && !clearedHazards) {
+        obstacles = [];
+        clearedHazards = true;
       }
 
       // 结束判定
